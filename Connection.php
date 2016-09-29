@@ -241,7 +241,12 @@ class Connection extends Component
      */
     private $_socket = false;
 
-
+    /**
+     *
+     * @var how many times have the connection been retried
+     */
+    private $_retryCount = 0;
+    
     /**
      * Closes the connection when this component is being serialized.
      * @return array
@@ -393,8 +398,17 @@ class Connection extends Component
 
         \Yii::trace("Executing Redis Command: {$name}", __METHOD__);
         fwrite($this->_socket, $command);
-
-        return $this->parseResponse(implode(' ', $params));
+        try{
+        	return $this->parseResponse(implode(' ', $params));
+        }catch (Exception $e){
+        	$this->close();
+        	if ($this->_retryCount <= 3){
+        		$this->executeCommand($name, $params);
+        		$this->_retryCount++;
+        	}else{
+        		throw $e;
+        	}
+        }
     }
 
     /**
@@ -411,6 +425,7 @@ class Connection extends Component
         $line = mb_substr($line, 1, -2, '8bit');
         switch ($type) {
             case '+': // Status reply
+            	$this->_retryCount = 0;
                 if ($line === 'OK' || $line === 'PONG') {
                     return true;
                 } else {
@@ -419,9 +434,11 @@ class Connection extends Component
             case '-': // Error reply
                 throw new Exception("Redis error: " . $line . "\nRedis command was: " . $command);
             case ':': // Integer reply
+            	$this->_retryCount = 0;
                 // no cast to int as it is in the range of a signed 64 bit integer
                 return $line;
             case '$': // Bulk replies
+            	$this->_retryCount = 0;
                 if ($line == '-1') {
                     return null;
                 }
@@ -437,6 +454,7 @@ class Connection extends Component
 
                 return mb_substr($data, 0, -2, '8bit');
             case '*': // Multi-bulk replies
+            	$this->_retryCount = 0;
                 $count = (int) $line;
                 $data = [];
                 for ($i = 0; $i < $count; $i++) {
